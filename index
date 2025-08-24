@@ -1,1 +1,641 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>単語リストプレイヤー（中日・A-B対応・TTSフォールバック・順序/ポーズカスタム）</title>
+<style>
+  :root { --gap: 12px; --radius: 10px; }
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Hiragino Kaku Gothic ProN", "Noto Sans JP", "Noto Sans SC", "Noto Sans", sans-serif; margin: 16px; }
+  header { display: grid; gap: 10px; margin-bottom: 16px; }
+  h1 { font-size: 1.15rem; margin: 0; }
+  .tip { color:#555; font-size:.9rem; line-height:1.4; }
+  .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  input[type="search"]{ flex:1 1 240px; padding:10px 12px; border:1px solid #ddd; border-radius: 10px; }
+  button, .btn { padding:8px 12px; border:1px solid #ddd; background:#fff; border-radius: 10px; cursor:pointer; }
+  button:hover, .btn:hover { background:#f5f5f5; }
+  select, .select, input[type="number"], input[type="text"] { padding:8px 10px; border:1px solid #ddd; border-radius:10px; }
+  .pill { font-size:.75rem; color:#666; border:1px solid #e5e5e5; padding:2px 6px; border-radius:999px;}
+  .list { display:grid; gap: 12px; }
+  .card { border:1px solid #eee; border-radius: 10px; padding: 10px 12px; display:grid; gap:8px; }
+  .head { display:flex; align-items:center; justify-content:space-between; gap:10px; }
+  .th { font-size: 1.15rem; font-weight:600; display:flex; align-items:center; gap:8px; }
+  .rom { color:#333; font-family: ui-monospace, Menlo, Consolas, monospace; }
+  .jp { color:#666; }
+  .fav { border:none; background:transparent; font-size: 1.1rem; padding:4px 6px; cursor:pointer; }
+  .fav[aria-pressed="true"]{ color:#e39; }
+  .progress-wrap{ display:flex; align-items:center; gap:6px; }
+  .progress{ height:6px; background:#eee; border-radius:999px; overflow:hidden; width:160px; }
+  .bar{ height:100%; width:0%; background:#999; }
+  .muted { color:#999; }
+  .small { font-size:.82rem; }
+  .hidden { display:none; }
+  .nowplaying { font-weight:600; }
+  .warn { color:#a33; }
+  .group { display:grid; gap:8px; padding:10px; border:1px dashed #ddd; border-radius:10px; }
+  .kv { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+</style>
+</head>
+<body>
+<header>
+  <h1>単語リストプレイヤー（中国語↔日本語・A-B対応・TTSフォールバック・順序/ポーズカスタム）</h1>
+  <div class="tip small">
+    ファイルがある語は<strong>ファイル再生</strong>（A–B可）、無い語は<strong>TTS</strong>に自動フォールバック。<br>
+    BASE_URL 既定: <code>./audio/</code>（?base=… で上書き可）
+  </div>
+
+  <!-- 検索・速度・連続再生 -->
+  <div class="row">
+    <input id="q" type="search" placeholder="検索：中国語 / ピンイン / 日本語 で絞り込み">
+    <button id="clearBtn">クリア</button>
+    <label class="small">
+      級フィルタ
+      <select id="levelFilter">
+        <option value="">（なし）</option>
+        <option value="hsk1">HSK1</option>
+        <option value="hsk2">HSK2</option>
+        <option value="hsk3">HSK3</option>
+        <option value="hsk4">HSK4</option>
+      </select>
+    </label>
+
+    <span>速度</span>
+    <button id="minusBtn">−</button>
+    <input id="rate" type="range" min="0.5" max="2.0" step="0.1" value="1.0" style="width:200px">
+    <button id="plusBtn">＋</button>
+    <span id="rateLabel" class="pill">1.0×</span>
+
+    <span class="pill small">再生対象</span>
+    <select id="seqMode">
+      <option value="all">一覧（全体）</option>
+      <option value="favs">お気に入りのみ</option>
+    </select>
+    <label class="small"><input id="loopOne" type="checkbox"> 1語ループ</label>
+    <button id="seqStart">▶ 連続</button>
+    <button id="seqStop">■ 停止</button>
+    <span id="np" class="small muted"></span>
+  </div>
+
+  <!-- シーケンス設定 -->
+  <div class="group">
+    <div class="kv">
+      <strong>シーケンス（1語あたりの流れ）</strong>
+      <select id="seqPreset">
+        <option value="zh,jp">中国語→日本語</option>
+        <option value="jp,zh">日本語→中国語</option>
+        <option value="zh,pause,jp">中国語→ポーズ→日本語</option>
+        <option value="custom">カスタム</option>
+      </select>
+      <label class="small">カスタム: <input id="seqCustom" type="text" value="zh,pause,jp" size="20"> <span class="muted small">（例: zh,jp / jp,zh / zh,pause,jp など）</span></label>
+      <label class="small">ポーズ秒: <input id="pauseSec" type="number" min="0" step="0.1" value="0.8" style="width:80px"></label>
+    </div>
+    <div class="kv">
+      <span class="pill small">再生ソース</span>
+      <label class="small"><input id="preferFileZh" type="checkbox" checked> 中国語はファイル優先（無ければTTS）</label>
+      <label class="small"><input id="preferFileJp" type="checkbox"> 日本語もファイル優先（無ければTTS）</label>
+      <span class="small muted">※ TTSはA–B不可。A–Bしたい語はファイルを用意してください。</span>
+    </div>
+  </div>
+</header>
+
+<section class="list" id="list"></section>
+<h2 style="margin:14px 0 6px;">フレーズ</h2>
+<section class="list" id="phraseList"></section>
+
+<div class="small muted" style="margin-top:10px">
+  中国語は正確な拼音（例：<code>nǐ hǎo</code>）を併記。お気に入り/A–B/速度/シーケンス設定は端末に保存。
+</div>
+
+<audio id="player" preload="none" crossOrigin="anonymous"></audio>
+
+<script>
+/* ===== 設定 ===== */
+let BASE_URL = "./audio/";
+try { const u=new URL(location.href); const b=u.searchParams.get('base'); if(b) BASE_URL=b; } catch(e){}
+const TTS_LANG_ZH = "zh-CN"; // 中国大陆標準（必要なら zh-TW 等に変更可）
+const TTS_LANG_JP = "ja-JP";
+
+/* ==== 追加：TTSボイス選択 ==== */
+let VOICES = [];
+function loadVoices(){ VOICES = speechSynthesis.getVoices(); }
+speechSynthesis.onvoiceschanged = loadVoices;
+loadVoices();
+
+function pickVoice(langTag){
+  const key = (langTag || "").toLowerCase();
+  let v = VOICES.find(v => (v.lang || "").toLowerCase() === key);
+  if (!v) v = VOICES.find(v => (v.lang || "").toLowerCase().startsWith(key.split("-")[0]));
+  return v || null;
+}
+
+/* ===== 単語データ（中国語↔日本語） =====
+  file_zh / file_jp は任意。無ければTTSにフォールバック。
+  lvl は目安として HSK レベルを付与。
+*/
+const ITEMS = [
+  // あいさつ・基本
+  { id:"zh-001", zh:"你好", rom:"nǐ hǎo", jp:"こんにちは", file_zh:"zh-001-nihao.mp3", lvl:["hsk1"] },
+  { id:"zh-002", zh:"谢谢", rom:"xièxie", jp:"ありがとう", lvl:["hsk1"] },
+  { id:"zh-003", zh:"对不起", rom:"duìbuqǐ", jp:"ごめんなさい", lvl:["hsk1"] },
+  { id:"zh-004", zh:"是", rom:"shì", jp:"〜だ／はい", lvl:["hsk1"] },
+
+  // コア動詞
+  { id:"core-001", zh:"去", rom:"qù", jp:"行く", lvl:["hsk1"] },
+  { id:"core-002", zh:"来", rom:"lái", jp:"来る", lvl:["hsk1"] },
+  { id:"core-003", zh:"有", rom:"yǒu", jp:"持つ・ある", lvl:["hsk1"] },
+  { id:"core-004", zh:"在", rom:"zài", jp:"いる・ある／〜で", lvl:["hsk1"] },
+  { id:"core-005", zh:"做", rom:"zuò", jp:"する・作る", lvl:["hsk1"] },
+  { id:"core-006", zh:"吃", rom:"chī", jp:"食べる", lvl:["hsk1"] },
+  { id:"core-007", zh:"喝", rom:"hē", jp:"飲む", lvl:["hsk1"] },
+  { id:"core-008", zh:"喜欢", rom:"xǐhuan", jp:"好き", lvl:["hsk1"] },
+  { id:"core-009", zh:"知道", rom:"zhīdào", jp:"知る", lvl:["hsk2"] },
+  { id:"core-010", zh:"懂", rom:"dǒng", jp:"分かる／理解する", lvl:["hsk2"] },
+  { id:"core-011", zh:"说", rom:"shuō", jp:"話す", lvl:["hsk1"] },
+  { id:"core-012", zh:"学习", rom:"xuéxí", jp:"学ぶ", lvl:["hsk1"] },
+  { id:"core-013", zh:"看", rom:"kàn", jp:"見る", lvl:["hsk1"] },
+  { id:"core-014", zh:"给", rom:"gěi", jp:"与える・〜に", lvl:["hsk2"] },
+
+  // 機能語・接続
+  { id:"core-020", zh:"不", rom:"bù", jp:"〜ない（否定）", lvl:["hsk1"] },
+  { id:"core-021", zh:"还是", rom:"háishi", jp:"それとも／〜ですか？", lvl:["hsk2"] },
+  { id:"core-022", zh:"的", rom:"de", jp:"〜の／（連体）／的", lvl:["hsk1"] },
+  { id:"core-023", zh:"和", rom:"hé", jp:"〜と／そして", lvl:["hsk1"] },
+  { id:"core-024", zh:"因为", rom:"yīnwèi", jp:"〜だから／なぜなら", lvl:["hsk2"] },
+  { id:"core-025", zh:"但是", rom:"dànshì", jp:"しかし", lvl:["hsk2"] },
+  { id:"core-026", zh:"已经", rom:"yǐjīng", jp:"もう／すでに", lvl:["hsk2"] },
+  { id:"core-027", zh:"也", rom:"yě", jp:"〜も", lvl:["hsk1"] },
+  { id:"core-028", zh:"就", rom:"jiù", jp:"すぐに／〜こそ／強調", lvl:["hsk2"] },
+
+  // 疑問語
+  { id:"core-030", zh:"谁", rom:"shéi", jp:"だれ", lvl:["hsk1"] },
+  { id:"core-031", zh:"什么", rom:"shénme", jp:"何", lvl:["hsk1"] },
+  { id:"core-032", zh:"哪儿", rom:"nǎr", jp:"どこ（口語）", lvl:["hsk1"] },
+  { id:"core-033", zh:"什么时候", rom:"shénme shíhou", jp:"いつ", lvl:["hsk2"] },
+  { id:"core-034", zh:"多少钱", rom:"duōshao qián", jp:"いくら", lvl:["hsk1"] },
+  { id:"core-035", zh:"为什么", rom:"wèi shénme", jp:"なぜ", lvl:["hsk2"] },
+  { id:"core-036", zh:"怎么", rom:"zěnme", jp:"どうやって／なぜ（口語）", lvl:["hsk1"] },
+
+  // 形容詞
+  { id:"core-040", zh:"好", rom:"hǎo", jp:"良い", lvl:["hsk1"] },
+  { id:"core-041", zh:"新", rom:"xīn", jp:"新しい", lvl:["hsk2"] },
+  { id:"core-042", zh:"旧", rom:"jiù", jp:"古い", lvl:["hsk2"] },
+  { id:"core-043", zh:"漂亮", rom:"piàoliang", jp:"きれい", lvl:["hsk1"] },
+  { id:"core-044", zh:"好吃", rom:"hǎochī", jp:"おいしい", lvl:["hsk1"] },
+  { id:"core-045", zh:"容易", rom:"róngyì", jp:"簡単", lvl:["hsk2"] },
+  { id:"core-046", zh:"难", rom:"nán", jp:"難しい", lvl:["hsk1"] },
+  { id:"core-047", zh:"贵", rom:"guì", jp:"高い（値段）", lvl:["hsk1"] },
+  { id:"core-048", zh:"快", rom:"kuài", jp:"速い", lvl:["hsk1"] },
+  { id:"core-049", zh:"慢", rom:"màn", jp:"遅い", lvl:["hsk1"] },
+
+  // サバイバル表現
+  { id:"core-050", zh:"是的", rom:"shìde", jp:"はい／そうです", lvl:["hsk1"] },
+  { id:"core-051", zh:"不是", rom:"bú shì", jp:"いいえ／違います", lvl:["hsk1"] },
+  { id:"core-052", zh:"谢谢你", rom:"xièxie nǐ", jp:"ありがとうございます", lvl:["hsk1"] },
+  { id:"core-053", zh:"对不起", rom:"duìbuqǐ", jp:"ごめんなさい", lvl:["hsk1"] },
+  { id:"core-054", zh:"请帮我", rom:"qǐng bāng wǒ", jp:"手伝ってください", lvl:["hsk2"] },
+
+  // 副詞
+  { id:"core-060", zh:"很", rom:"hěn", jp:"とても", lvl:["hsk1"] },
+  { id:"core-061", zh:"一点儿", rom:"yìdiǎnr", jp:"少し／少ない", lvl:["hsk1"] },
+  { id:"core-062", zh:"总是", rom:"zǒngshì", jp:"いつも", lvl:["hsk3"] },
+  { id:"core-063", zh:"经常", rom:"jīngcháng", jp:"よく／頻繁に", lvl:["hsk3"] },
+  { id:"core-064", zh:"马上", rom:"mǎshàng", jp:"すぐに／まもなく", lvl:["hsk3"] },
+
+  // 時間
+  { id:"core-070", zh:"今天", rom:"jīntiān", jp:"今日", lvl:["hsk1"] },
+  { id:"core-071", zh:"明天", rom:"míngtiān", jp:"明日", lvl:["hsk1"] },
+  { id:"core-072", zh:"昨天", rom:"zuótiān", jp:"昨日", lvl:["hsk1"] },
+  { id:"core-073", zh:"现在", rom:"xiànzài", jp:"今", lvl:["hsk1"] },
+  { id:"core-074", zh:"马上", rom:"mǎshàng", jp:"すぐに", lvl:["hsk3"] },
+
+  // 場所
+  { id:"core-080", zh:"家", rom:"jiā", jp:"家", lvl:["hsk1"] },
+  { id:"core-081", zh:"学校", rom:"xuéxiào", jp:"学校", lvl:["hsk1"] },
+  { id:"core-082", zh:"饭馆", rom:"fànguǎn", jp:"レストラン", lvl:["hsk2"] },
+  { id:"core-083", zh:"市场", rom:"shìchǎng", jp:"市場", lvl:["hsk3"] },
+  { id:"core-084", zh:"医院", rom:"yīyuàn", jp:"病院", lvl:["hsk2"] },
+
+  // 色
+  { id:"core-090", zh:"红色", rom:"hóngsè", jp:"赤", lvl:["hsk1"] },
+  { id:"core-091", zh:"蓝色", rom:"lánsè", jp:"青／青色", lvl:["hsk1"] },
+  { id:"core-092", zh:"绿色", rom:"lǜsè", jp:"緑", lvl:["hsk1"] },
+  { id:"core-093", zh:"黄色", rom:"huángsè", jp:"黄", lvl:["hsk1"] },
+  { id:"core-094", zh:"白色", rom:"báisè", jp:"白", lvl:["hsk1"] },
+  { id:"core-095", zh:"黑色", rom:"hēisè", jp:"黒", lvl:["hsk1"] },
+
+  // 数字（1〜10）
+  { id:"core-100", zh:"一", rom:"yī", jp:"1", lvl:["hsk1"] },
+  { id:"core-101", zh:"二", rom:"èr", jp:"2", lvl:["hsk1"] },
+  { id:"core-102", zh:"三", rom:"sān", jp:"3", lvl:["hsk1"] },
+  { id:"core-103", zh:"四", rom:"sì", jp:"4", lvl:["hsk1"] },
+  { id:"core-104", zh:"五", rom:"wǔ", jp:"5", lvl:["hsk1"] },
+  { id:"core-105", zh:"六", rom:"liù", jp:"6", lvl:["hsk1"] },
+  { id:"core-106", zh:"七", rom:"qī", jp:"7", lvl:["hsk1"] },
+  { id:"core-107", zh:"八", rom:"bā", jp:"8", lvl:["hsk1"] },
+  { id:"core-108", zh:"九", rom:"jiǔ", jp:"9", lvl:["hsk1"] },
+  { id:"core-109", zh:"十", rom:"shí", jp:"10", lvl:["hsk1"] },
+
+  // 家族
+  { id:"core-120", zh:"爸爸", rom:"bàba", jp:"父", lvl:["hsk1"] },
+  { id:"core-121", zh:"妈妈", rom:"māma", jp:"母", lvl:["hsk1"] },
+  { id:"core-122", zh:"孩子", rom:"háizi", jp:"子供", lvl:["hsk2"] },
+  { id:"core-123", zh:"哥哥", rom:"gēge", jp:"兄", lvl:["hsk1"] },
+  { id:"core-124", zh:"弟弟", rom:"dìdi", jp:"弟", lvl:["hsk1"] },
+  { id:"core-125", zh:"姐姐", rom:"jiějie", jp:"姉", lvl:["hsk1"] },
+  { id:"core-126", zh:"妹妹", rom:"mèimei", jp:"妹", lvl:["hsk1"] },
+
+  // 人称代名詞
+  { id:"core-200", zh:"我", rom:"wǒ", jp:"私", lvl:["hsk1"] },
+  { id:"core-201", zh:"你", rom:"nǐ", jp:"あなた", lvl:["hsk1"] },
+  { id:"core-202", zh:"他", rom:"tā", jp:"彼", lvl:["hsk1"] },
+  { id:"core-203", zh:"她", rom:"tā", jp:"彼女", lvl:["hsk1"] },
+  { id:"core-204", zh:"我们", rom:"wǒmen", jp:"私たち", lvl:["hsk1"] }
+];
+
+/* ===== フレーズデータ（中国語↔日本語） ===== */
+const PHRASES = [
+  { id:"ph-001", zh:"你好，很高兴认识你。", rom:"nǐ hǎo, hěn gāoxìng rènshi nǐ", jp:"こんにちは。はじめまして。", lvl:["hsk1"] },
+  { id:"ph-002", zh:"你身体好吗？", rom:"nǐ shēntǐ hǎo ma", jp:"お元気ですか？", lvl:["hsk1"] },
+  { id:"ph-003", zh:"我很饿。", rom:"wǒ hěn è", jp:"とてもお腹が空きました。", lvl:["hsk1"] },
+  { id:"ph-004", zh:"一起去好吗？", rom:"yìqǐ qù hǎo ma", jp:"一緒に行きませんか？", lvl:["hsk1"] },
+  { id:"ph-005", zh:"这个多少钱？", rom:"zhège duōshao qián", jp:"これはいくらですか？", lvl:["hsk1"] },
+  { id:"ph-006", zh:"非常感谢。", rom:"fēicháng gǎnxiè", jp:"本当にありがとうございます。", lvl:["hsk2"] },
+  { id:"ph-007", zh:"对不起，我来晚了。", rom:"duìbuqǐ, wǒ lái wǎn le", jp:"すみません、遅れました。", lvl:["hsk2"] },
+  { id:"ph-008", zh:"请再说一遍。", rom:"qǐng zài shuō yí biàn", jp:"もう一度言ってもらえますか？", lvl:["hsk1"] },
+  { id:"ph-009", zh:"我在学习中文。", rom:"wǒ zài xuéxí zhōngwén", jp:"私は中国語を勉強しています。", lvl:["hsk1"] },
+  { id:"ph-010", zh:"这个很好吃！", rom:"zhège hěn hǎochī", jp:"これすごくおいしい！", lvl:["hsk1"] },
+  { id:"ph-011", zh:"洗手间在哪儿？", rom:"xǐshǒujiān zài nǎr", jp:"トイレはどこですか？", lvl:["hsk1"] },
+  { id:"ph-012", zh:"救命！", rom:"jiùmìng", jp:"助けて！", lvl:["hsk3"] },
+  { id:"ph-013", zh:"我不懂。", rom:"wǒ bù dǒng", jp:"私は理解できません。", lvl:["hsk1"] },
+  { id:"ph-014", zh:"你会说英语吗？", rom:"nǐ huì shuō yīngyǔ ma", jp:"英語を話せますか？", lvl:["hsk1"] },
+  { id:"ph-015", zh:"去机场怎么走？", rom:"qù jīchǎng zěnme zǒu", jp:"空港へはどう行きますか？", lvl:["hsk2"] },
+  { id:"ph-016", zh:"我想去市场。", rom:"wǒ xiǎng qù shìchǎng", jp:"市場に行きたいです。", lvl:["hsk2"] },
+  { id:"ph-017", zh:"地铁去哪里？", rom:"dìtiě qù nǎlǐ", jp:"地下鉄はどこへ行きますか？", lvl:["hsk2"] },
+  { id:"ph-018", zh:"现在几点？", rom:"xiànzài jǐ diǎn", jp:"今何時ですか？", lvl:["hsk1"] },
+  { id:"ph-019", zh:"今天很热。", rom:"jīntiān hěn rè", jp:"今日はとても暑いです。", lvl:["hsk1"] },
+  { id:"ph-020", zh:"雨下得很大。", rom:"yǔ xià de hěn dà", jp:"大雨が降っています。", lvl:["hsk3"] },
+  { id:"ph-021", zh:"我想吃中国菜。", rom:"wǒ xiǎng chī zhōngguó cài", jp:"中華料理を食べたいです。", lvl:["hsk1"] },
+  { id:"ph-022", zh:"请给我一杯水。", rom:"qǐng gěi wǒ yì bēi shuǐ", jp:"水を一杯ください。", lvl:["hsk1"] },
+  { id:"ph-023", zh:"请买单。", rom:"qǐng mǎidān", jp:"お会計をお願いします。", lvl:["hsk2"] },
+  { id:"ph-024", zh:"可以便宜一点儿吗？", rom:"kěyǐ piányi yìdiǎnr ma", jp:"値引きできますか？", lvl:["hsk2"] },
+  { id:"ph-025", zh:"我迷路了。", rom:"wǒ mílù le", jp:"道に迷いました。", lvl:["hsk2"] },
+  { id:"ph-026", zh:"请帮我拍张照片。", rom:"qǐng bāng wǒ pāi zhāng zhàopiàn", jp:"写真を撮ってもらえますか？", lvl:["hsk3"] },
+  { id:"ph-027", zh:"离车站近吗？", rom:"lí chēzhàn jìn ma", jp:"駅は近いですか？", lvl:["hsk2"] },
+  { id:"ph-028", zh:"请给我一张去北京的票。", rom:"qǐng gěi wǒ yì zhāng qù Běijīng de piào", jp:"北京行きの切符を1枚ください。", lvl:["hsk3"] },
+  { id:"ph-029", zh:"有空房间吗？", rom:"yǒu kòng fángjiān ma", jp:"空いている部屋はありますか？", lvl:["hsk3"] },
+  { id:"ph-030", zh:"请写一下地址。", rom:"qǐng xiě yíxià dìzhǐ", jp:"住所を書いていただけますか？", lvl:["hsk2"] }
+];
+
+/* ===== レベル付与（ID→[levels] の追加が必要ならここで） ===== */
+const LEVELS = {};
+function applyLevels(arr){
+  arr.forEach(it=>{
+    const extra = LEVELS[it.id] || [];
+    if (!it.lvl) it.lvl = [];
+    it.lvl = Array.from(new Set([...(it.lvl||[]), ...extra]));
+  });
+}
+applyLevels(ITEMS);
+applyLevels(PHRASES);
+
+/* ===== 参照 ===== */
+const list = document.getElementById('list');
+const phraseList = document.getElementById('phraseList');
+const q = document.getElementById('q'), clearBtn = document.getElementById('clearBtn');
+const levelFilter = document.getElementById('levelFilter');
+const player = document.getElementById('player');
+const rate = document.getElementById('rate'), rateLabel = document.getElementById('rateLabel');
+const minusBtn = document.getElementById('minusBtn'), plusBtn = document.getElementById('plusBtn');
+const seqMode = document.getElementById('seqMode'), loopOne = document.getElementById('loopOne');
+const seqStart = document.getElementById('seqStart'), seqStop = document.getElementById('seqStop'), np = document.getElementById('np');
+const seqPreset = document.getElementById('seqPreset'), seqCustom = document.getElementById('seqCustom'), pauseSec = document.getElementById('pauseSec');
+const preferFileZh = document.getElementById('preferFileZh'), preferFileJp = document.getElementById('preferFileJp');
+
+let currentId=null, isContinuous=false, queue=[], queueIndex=-1, speaking=false;
+
+/* ===== 速度 ===== */
+function roundRate(x){ const v=Math.round(x*10)/10; return Math.min(2.0, Math.max(0.5, v)); }
+function applyRate(v){ const r=roundRate(v); player.playbackRate=r; rate.value=r.toFixed(1); rateLabel.textContent=r.toFixed(1)+'×'; localStorage.setItem('playerRate', r.toFixed(1)); }
+(function initRate(){ const saved=parseFloat(localStorage.getItem('playerRate')||'1.0'); applyRate(saved); })();
+rate.addEventListener('input', e=>applyRate(parseFloat(e.target.value)));
+minusBtn.addEventListener('click', ()=>applyRate(parseFloat(rate.value)-0.1));
+plusBtn.addEventListener('click', ()=>applyRate(parseFloat(rate.value)+0.1));
+
+/* ===== お気に入り ===== */
+function getFavs(){ try {return JSON.parse(localStorage.getItem('favs')||'[]')} catch(e){return []} }
+function setFavs(a){ localStorage.setItem('favs', JSON.stringify(a)); }
+function isFav(id){ return getFavs().includes(id); }
+function toggleFav(id){ const a=getFavs(); const i=a.indexOf(id); if(i>=0) a.splice(i,1); else a.push(id); setFavs(a); }
+
+/* ===== A-B（語ごと保存。ファイル再生のみ有効） ===== */
+function loadABMap(){ try {return JSON.parse(localStorage.getItem('abMap')||'{}')} catch(e){return {}} }
+function saveABMap(m){ localStorage.setItem('abMap', JSON.stringify(m)); }
+function getAB(id){ const m=loadABMap(); return m[id]||{a:null,b:null,enabled:false}; }
+function setAB(id,o){ const m=loadABMap(); m[id]=o; saveABMap(m); }
+
+/* ===== UI描画 ===== */
+function secondsToMMSS(sec){ if(!isFinite(sec)) return '–:––'; const m=Math.floor(sec/60), s=Math.floor(sec%60); return m+':'+String(s).padStart(2,'0'); }
+function render(items){
+  list.innerHTML='';
+  items.forEach(item=>{
+    const card=document.createElement('div'); card.className='card'; card.dataset.id=item.id;
+
+    const head=document.createElement('div'); head.className='head';
+    const L=document.createElement('div'); L.className='th';
+    const fav=document.createElement('button'); fav.className='fav'; const on=isFav(item.id);
+    fav.setAttribute('aria-pressed', on?'true':'false'); fav.textContent=on?'★':'☆';
+    fav.addEventListener('click', ()=>{ toggleFav(item.id); const n=isFav(item.id); fav.setAttribute('aria-pressed', n?'true':'false'); fav.textContent=n?'★':'☆'; if(isContinuous && seqMode.value==='favs') buildQueue(); });
+    const zhText=document.createElement('span'); zhText.textContent=item.zh;
+    L.appendChild(fav); L.appendChild(zhText);
+
+    const R=document.createElement('div');
+    const playBtn=document.createElement('button'); playBtn.textContent='▶ 再生';
+    playBtn.addEventListener('click', ()=>userStart(item));
+    R.appendChild(playBtn);
+
+    head.appendChild(L); head.appendChild(R);
+
+    const rom=document.createElement('div'); rom.className='rom'; rom.textContent=item.rom;
+    const jp=document.createElement('div'); jp.className='jp'; jp.textContent=item.jp;
+
+    const progWrap=document.createElement('div'); progWrap.className='progress-wrap';
+    const prog=document.createElement('div'); prog.className='progress'; const bar=document.createElement('div'); bar.className='bar'; prog.appendChild(bar);
+    const timeLabel=document.createElement('span'); timeLabel.className='small muted'; timeLabel.textContent='0:00';
+    progWrap.appendChild(prog); progWrap.appendChild(timeLabel);
+
+    card.appendChild(head); card.appendChild(rom); card.appendChild(jp); card.appendChild(progWrap);
+    list.appendChild(card);
+
+    item._els={ playBtn, zhText, progWrap, bar, timeLabel };
+  });
+  updateNowPlayingStyle();
+}
+
+// --- 中国語 分割ヘルパー（簡体字は文字境界で）---
+function tokenizeChineseForClickable(text){
+  // 句読点・空白で分割。漢字は1文字単位でクリック可能にするのは学習に不向きなので、ここではスペースで単語分割されていれば単語扱い。
+  const hasSpace = /\s/.test(text);
+  if (hasSpace){
+    return text.split(/(\s+|[，。！？、“”‘’（）()、·・…—\-])/).filter(Boolean).map(t=>({
+      text:t,
+      clickable:!(/\s+|[，。！？、“”‘’（）()、·・…—\-]/.test(t))
+    }));
+  }
+  // スペースが無い場合は句読点のみで分け、単語クリックは無効に（誤クリック防止）
+  return text.split(/([，。！？、“”‘’（）()、·・…—\-])/).filter(Boolean).map(t=>({
+    text:t,
+    clickable:false
+  }));
+}
+
+function jumpSearch(word){ q.value = word; doFilter(); }
+
+// フレーズ描画
+function renderPhrases(items){
+  phraseList.innerHTML = '';
+  items.forEach(p=>{
+    const card = document.createElement('div');
+    card.className = 'card';
+    card.dataset.id = p.id;
+
+    const head = document.createElement('div');
+    head.className = 'head';
+
+    const L = document.createElement('div');
+    L.className = 'th';
+
+    const frag = document.createDocumentFragment();
+    tokenizeChineseForClickable(p.zh).forEach(tok=>{
+      if (!tok.clickable){
+        frag.appendChild(document.createTextNode(tok.text));
+      }else{
+        const span = document.createElement('span');
+        span.textContent = tok.text;
+        span.style.textDecoration = 'underline';
+        span.style.textUnderlineOffset = '3px';
+        span.style.cursor = 'pointer';
+        span.title = 'この語で検索';
+        span.addEventListener('click', ()=> jumpSearch(tok.text));
+        frag.appendChild(span);
+      }
+    });
+    L.appendChild(frag);
+
+    const R = document.createElement('div');
+    const btn = document.createElement('button');
+    btn.textContent = '▶ 再生';
+    btn.addEventListener('click', ()=> playSequenceFor(p));
+    R.appendChild(btn);
+
+    head.appendChild(L); head.appendChild(R);
+
+    const rom = document.createElement('div');
+    rom.className='rom';
+    rom.textContent = p.rom || '';
+
+    const jp = document.createElement('div');
+    jp.className='jp';
+    jp.textContent = p.jp || '';
+
+    card.appendChild(head);
+    card.appendChild(rom);
+    card.appendChild(jp);
+    phraseList.appendChild(card);
+
+    p._els = { playBtn: btn, zhText: L };
+  });
+}
+
+function updateNowPlayingStyle(){
+  [...ITEMS, ...PHRASES].forEach(it=>{
+    if(!it._els) return;
+    it._els.zhText.classList.toggle('nowplaying',
+      it.id === currentId && (!player.paused || speaking)
+    );
+  });
+}
+
+function updateProgressUI(item){ if(!item||!item._els) return; const {bar,timeLabel}=item._els; const dur=player.duration||0, cur=player.currentTime||0; const pct=dur?Math.min(100, Math.max(0,(cur/dur)*100)):0; bar.style.width=pct+'%'; timeLabel.textContent=secondsToMMSS(cur)+(dur?' / '+secondsToMMSS(dur):''); }
+let progressTimer=null;
+function startProgress(item){ stopProgress(); progressTimer=setInterval(()=>updateProgressUI(item),200); }
+function stopProgress(){ if(progressTimer) clearInterval(progressTimer); progressTimer=null; }
+
+/* ===== シーケンス設定 保存/復元 ===== */
+function saveSeqPrefs(){
+  const obj={preset:seqPreset.value, custom:seqCustom.value, pause:parseFloat(pauseSec.value)||0.8, pfZh:preferFileZh.checked, pfJp:preferFileJp.checked};
+  localStorage.setItem('seqPrefsZH', JSON.stringify(obj));
+}
+function loadSeqPrefs(){
+  try{
+    const o=JSON.parse(localStorage.getItem('seqPrefsZH')||'{}');
+    if(o.preset) seqPreset.value=o.preset;
+    if(o.custom) seqCustom.value=o.custom;
+    if(o.pause!=null) pauseSec.value=o.pause;
+    if(o.pfZh!=null) preferFileZh.checked=o.pfZh;
+    if(o.pfJp!=null) preferFileJp.checked=o.pfJp;
+  }catch(e){}
+}
+[seqPreset,seqCustom,pauseSec,preferFileZh,preferFileJp].forEach(el=>el.addEventListener('change', saveSeqPrefs));
+loadSeqPrefs();
+
+/* ===== 再生エンジン ===== */
+function patternSteps(){
+  const v = (seqPreset.value==='custom' ? seqCustom.value : seqPreset.value).trim();
+  return v.split(',').map(s=>s.trim()).filter(Boolean); // 'zh','jp','pause'
+}
+function tts(text, lang, rate){
+  return new Promise((resolve,reject)=>{
+    const u = new SpeechSynthesisUtterance(text);
+    const v = pickVoice(lang);
+    if (v) u.voice = v;
+    u.lang = v?.lang || lang;
+    u.rate = rate;
+    u.onstart = ()=>{ speaking=true; updateNowPlayingStyle(); };
+    u.onend   = ()=>{ speaking=false; resolve(); };
+    u.onerror = e =>{ speaking=false; reject(e); };
+    speechSynthesis.cancel();
+    speechSynthesis.speak(u);
+  });
+}
+function playFile(src, ab){
+  return new Promise((resolve,reject)=>{
+    player.src = src;
+    const onEnded = ()=>{ cleanup(); resolve(); };
+    const onTime = ()=>{
+      if(ab && ab.enabled && ab.a!=null && ab.b!=null){
+        const eps=0.02; if(player.currentTime >= ab.b-eps){ player.currentTime = ab.a; }
+      }
+    };
+    const onErr = (e)=>{ cleanup(); reject(e); };
+    function cleanup(){ player.removeEventListener('ended', onEnded); player.removeEventListener('timeupdate', onTime); player.removeEventListener('error', onErr); stopProgress(); }
+    player.play().then(()=>{
+      startProgress(ITEMS.find(it=>it.id===currentId));
+      player.addEventListener('ended', onEnded);
+      player.addEventListener('timeupdate', onTime);
+      player.addEventListener('error', onErr);
+    }).catch(onErr);
+  });
+}
+function fileUrl(name){ return BASE_URL + name; }
+
+async function playSequenceFor(item){
+  currentId = item.id;
+  updateNowPlayingStyle();
+  setAllButtonsToPlay(); item._els.playBtn.textContent='⏸ 停止';
+  const showLeft = item.zh || (item.jp + ' / ' + (item.rom||''));
+  np.textContent = 'Now Playing: ' + showLeft;
+
+  const rateVal = parseFloat(localStorage.getItem('playerRate')||'1.0');
+  const ab = getAB(item.id);
+  const steps = patternSteps();
+  for (let step of steps){
+    if(step==='pause'){ await new Promise(r=>setTimeout(r, Math.max(0, (parseFloat(pauseSec.value)||0.8)*1000))); continue; }
+    if(step==='zh'){
+      const useFile = preferFileZh.checked && item.file_zh;
+      if(useFile){
+        player.playbackRate = rateVal;
+        startProgress(ITEMS.find(it=>it.id===currentId));
+        await playFile(fileUrl(item.file_zh), ab.enabled?ab:null).catch(()=>{});
+      }else{
+        stopProgress();
+        await tts(item.zh, TTS_LANG_ZH, rateVal).catch(()=>{});
+      }
+    }
+    if(step==='jp'){
+      const useFile = preferFileJp.checked && item.file_jp;
+      if(useFile){
+        player.playbackRate = rateVal;
+        startProgress(ITEMS.find(it=>it.id===currentId));
+        await playFile(fileUrl(item.file_jp), null).catch(()=>{});
+      }else{
+        stopProgress();
+        await tts(item.jp, TTS_LANG_JP, rateVal).catch(()=>{});
+      }
+    }
+  }
+}
+function setAllButtonsToPlay(){
+  [...ITEMS, ...PHRASES].forEach(it=>{ if(it._els) it._els.playBtn.textContent = '▶ 再生'; });
+}
+
+async function userStart(item){
+  if (isContinuous) {
+    const ix = queue.findIndex(x => x.id === item.id);
+    if (ix >= 0) queueIndex = ix; else { seqMode.value='all'; buildQueue(); queueIndex = queue.findIndex(x => x.id === item.id); }
+  }
+  await playSequenceFor(item);
+  if (!isContinuous) { currentId=null; setAllButtonsToPlay(); updateNowPlayingStyle(); np.textContent=''; return; }
+  if (loopOne.checked) { userStart(item); return; }
+  queueIndex++; if(queueIndex>=queue.length){ stopContinuous(); return; }
+  userStart(queue[queueIndex]);
+}
+
+/* ===== 連続再生 ===== */
+function currentFilteredItems(){
+  const v = q.value.trim().toLowerCase();
+  const lv = levelFilter.value;
+  return ITEMS.filter(it =>
+    (it.zh.toLowerCase().includes(v) ||
+     (it.rom||'').toLowerCase().includes(v) ||
+     it.jp.toLowerCase().includes(v)) &&
+    (!lv || (it.lvl && it.lvl.includes(lv)))
+  );
+}
+
+function buildQueue(){
+  if (seqMode.value==='favs'){
+    const fav=new Set(getFavs());
+    const lv = levelFilter.value;
+    queue = ITEMS.filter(it => fav.has(it.id) && (!lv || (it.lvl && it.lvl.includes(lv))));
+  } else {
+    queue = currentFilteredItems();
+  }
+}
+function startContinuous(){ buildQueue(); if(!queue.length){ alert(seqMode.value==='favs'?'お気に入りが空です。☆をつけてください。':'再生対象がありません。'); return; } isContinuous=true; const ix=currentId?queue.findIndex(x=>x.id===currentId):-1; queueIndex=ix>=0?ix:0; userStart(queue[queueIndex]); seqStart.disabled=true; seqMode.disabled=true; }
+function stopContinuous(){ isContinuous=false; queue=[]; queueIndex=-1; seqStart.disabled=false; seqMode.disabled=false; np.textContent=''; }
+seqStart.addEventListener('click', startContinuous);
+seqStop.addEventListener('click', ()=>{ stopContinuous(); speechSynthesis.cancel(); if(!player.paused){ player.pause(); } });
+
+// フレーズ側：指定級の語を含むかざっくり判定（簡易）
+function phraseUsesLevel(p, lv){
+  if (!lv) return true;
+  const targets = new Set(ITEMS.filter(it => it.lvl && it.lvl.includes(lv)).map(it => it.zh));
+  for (const zh of targets){ if ((p.zh||'').includes(zh)) return true; }
+  return false;
+}
+
+/* ===== 検索 ===== */
+function doFilter(){
+  const v = q.value.trim().toLowerCase();
+  const lv = levelFilter.value;
+
+  const wordFiltered = ITEMS.filter(it => {
+    const hit = it.zh.toLowerCase().includes(v) ||
+                (it.rom||'').toLowerCase().includes(v) ||
+                it.jp.toLowerCase().includes(v);
+    const okLevel = !lv || (it.lvl && it.lvl.includes(lv));
+    return hit && okLevel;
+  });
+  render(wordFiltered);
+
+  const phraseFiltered = PHRASES.filter(p => {
+    const hit = (p.zh||'').toLowerCase().includes(v) ||
+                (p.rom||'').toLowerCase().includes(v) ||
+                (p.jp||'').toLowerCase().includes(v);
+    const okLevel = !lv || phraseUsesLevel(p, lv);
+    return hit && okLevel;
+  });
+  renderPhrases(phraseFiltered);
+}
+
+q.addEventListener('input', doFilter); clearBtn.addEventListener('click', ()=>{ q.value=''; doFilter(); });
+levelFilter.addEventListener('change', doFilter);
+
+/* ===== 初期描画 ===== */
+render(ITEMS);
+renderPhrases(PHRASES);
+</script>
+</body>
+</html>
 
